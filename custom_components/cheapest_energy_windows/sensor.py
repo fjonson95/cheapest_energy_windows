@@ -155,6 +155,7 @@ class CEWBaseSensor(CoordinatorEntity, SensorEntity):
             config.get("vat", 0.21),
             config.get("tax", 0.12286),
             config.get("additional_cost", 0.02398),
+            config.get("additional_sale_cost", 0.02398),
             config.get("battery_rte", 90),
             config.get("charge_power", 2400),
             config.get("discharge_power", 2400),

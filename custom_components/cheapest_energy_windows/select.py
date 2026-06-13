@@ -15,6 +15,10 @@ from .const import (
     LOGGER_NAME,
     PREFIX,
     VERSION,
+    DEFAULT_BUY_PRICE_FORMULA,
+    DEFAULT_SELL_PRICE_FORMULA,
+    BUY_PRICE_FORMULA_OPTIONS,
+    SELL_PRICE_FORMULA_OPTIONS,
 )
 
 _LOGGER = logging.getLogger(LOGGER_NAME)
@@ -38,6 +42,21 @@ async def async_setup_entry(
         ("base_usage_idle_strategy", "Base Usage: During Idle", ["battery_covers", "grid_covers"], "battery_covers", "mdi:home-lightning-bolt"),
         ("base_usage_discharge_strategy", "Base Usage: During Discharge", ["already_included", "subtract_base"], "subtract_base", "mdi:battery-arrow-down"),
         ("base_usage_aggressive_strategy", "Base Usage: During Aggressive Discharge", ["same_as_discharge", "already_included", "subtract_base"], "same_as_discharge", "mdi:battery-alert"),
+        # Price formula selects
+        (
+            "buy_price_formula",
+            "Buy Price Formula",
+            BUY_PRICE_FORMULA_OPTIONS,
+            DEFAULT_BUY_PRICE_FORMULA,
+            "mdi:cart-arrow-down",
+        ),
+        (
+            "sell_price_formula",
+            "Sell Price Formula",
+            SELL_PRICE_FORMULA_OPTIONS,
+            DEFAULT_SELL_PRICE_FORMULA,
+            "mdi:cash-plus",
+        ),
     ]
 
     for key, name, options, default, icon in select_configs:
@@ -106,7 +125,6 @@ class CEWSelect(SelectEntity):
         self.async_write_ha_state()
 
         # Only trigger coordinator update for selects that affect calculations
-        # Check against the centralized registry of calculation-affecting keys
         if self._key in CALCULATION_AFFECTING_KEYS:
             if DOMAIN in self.hass.data and self._config_entry.entry_id in self.hass.data[DOMAIN]:
                 coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id].get("coordinator")

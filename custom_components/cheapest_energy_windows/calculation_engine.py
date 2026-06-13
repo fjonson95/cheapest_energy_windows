@@ -22,6 +22,8 @@ from .const import (
     STATE_DISCHARGE_AGGRESSIVE,
     STATE_IDLE,
     STATE_OFF,
+    DEFAULT_BUY_PRICE_FORMULA,
+    DEFAULT_SELL_PRICE_FORMULA,
 )
 
 _LOGGER = logging.getLogger(LOGGER_NAME)
@@ -33,6 +35,85 @@ class WindowCalculationEngine:
     def __init__(self) -> None:
         """Initialize the calculation engine."""
         pass
+
+    # ------------------------------------------------------------------
+    # Price formula helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _apply_buy_price(
+        spot: float,
+        vat: float,
+        tax: float,
+        additional_cost: float,
+        formula: str,
+    ) -> float:
+        """Calculate the total buy (purchase) price from a spot price.
+
+        Two formulas are supported:
+
+        ``additive`` (legacy default)::
+
+            buy = (spot * (1 + vat)) + tax + additional_cost
+
+        ``inclusive`` (VAT applied to all components)::
+
+            buy = (spot + tax + additional_cost) * (1 + vat)
+
+        Args:
+            spot: Raw spot price in EUR/kWh (excl. VAT/tax).
+            vat: VAT rate as a decimal, e.g. 0.21 for 21 %.
+            tax: Fixed energy tax in EUR/kWh.
+            additional_cost: Additional grid/distribution cost in EUR/kWh.
+            formula: ``"additive"`` or ``"inclusive"``.
+
+        Returns:
+            Total consumer buy price in EUR/kWh.
+        """
+        if formula == "inclusive":
+            return (spot + tax + additional_cost) * (1.0 + vat)
+        # Default: additive
+        return (spot * (1.0 + vat)) + tax + additional_cost
+
+    @staticmethod
+    def _apply_sell_price(
+        spot: float,
+        tax: float,
+        additional_sale_cost: float,
+        formula: str,
+    ) -> float:
+        """Calculate the effective sell (export) price from a spot price.
+
+        Two formulas are supported:
+
+        ``spot_only`` (default)::
+
+            sell = spot
+
+        ``minus_costs`` (costs deducted from spot)::
+
+            sell = spot - additional_sale_cost - tax
+
+        Args:
+            spot: Raw spot price in EUR/kWh (excl. VAT/tax).
+            tax: Fixed energy tax in EUR/kWh.
+            additional_sale_cost: Additional grid/distribution cost in EUR/kWh.
+            formula: ``"spot_only"`` or ``"minus_costs"``.
+
+        Returns:
+            Effective sell price in EUR/kWh (floored at 0 to avoid
+            negative revenue on very cheap/negative spot prices).
+        """
+        if formula == "minus_costs":
+            return max(0.0, spot - additional_sale_cost - tax)
+        if formula == "no_tax":
+            return max(0.0, stop - additional_sale_cost)
+        # Default: spot_only
+        return max(0.0, spot)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def calculate_windows(
         self,
@@ -56,6 +137,8 @@ class WindowCalculationEngine:
         _LOGGER.debug(f"calculation_window_enabled in config: {config.get('calculation_window_enabled', 'NOT PRESENT')}")
         _LOGGER.debug(f"calculation_window_start: {config.get('calculation_window_start', 'NOT PRESENT')}")
         _LOGGER.debug(f"calculation_window_end: {config.get('calculation_window_end', 'NOT PRESENT')}")
+        _LOGGER.debug(f"buy_price_formula: {config.get('buy_price_formula', DEFAULT_BUY_PRICE_FORMULA)}")
+        _LOGGER.debug(f"sell_price_formula: {config.get('sell_price_formula', DEFAULT_SELL_PRICE_FORMULA)}")
 
         # Get configuration values
         pricing_mode = config.get("pricing_window_duration", PRICING_15_MINUTES)
@@ -75,11 +158,14 @@ class WindowCalculationEngine:
         # Cost calculations
         vat = config.get("vat", 0.21)
         tax = config.get("tax", 0.12286)
-        additional_cost = config.get("additional_cost", 0.02398)
+        additional_cost = config.get("additional_cost", DEFAULT_ADDITIONAL_COST)
+        additional_sale_cost = config.get("additional_sale_cost", DEFAULT_ADDITIONAL_SALE_COST)
+        buy_formula = config.get("buy_price_formula", DEFAULT_BUY_PRICE_FORMULA)
+        sell_formula = config.get("sell_price_formula", DEFAULT_SELL_PRICE_FORMULA)
 
         # Process prices based on mode
         processed_prices = self._process_prices(
-            raw_prices, pricing_mode, vat, tax, additional_cost
+            raw_prices, pricing_mode, vat, tax, additional_cost, additional_sale_cost, buy_formula, sell_formula
         )
 
         if not processed_prices:
@@ -233,23 +319,34 @@ class WindowCalculationEngine:
 
         return result
 
+    # ------------------------------------------------------------------
+    # Price processing
+    # ------------------------------------------------------------------
+
     def _process_prices(
         self,
         raw_prices: List[Dict[str, Any]],
         pricing_mode: str,
         vat: float,
         tax: float,
-        additional_cost: float
+        additional_cost: float,
+        additional_sale_cost: float,
+        buy_formula: str = DEFAULT_BUY_PRICE_FORMULA,
+        sell_formula: str = DEFAULT_SELL_PRICE_FORMULA,
     ) -> List[Dict[str, Any]]:
-        """Process raw prices with VAT, tax, and additional costs."""
+        """Process raw prices with VAT, tax, and additional costs.
+
+        Each processed entry gains both a ``price`` (buy price used for
+        charge-window selection and cost tracking) and a ``sell_price``
+        (used for discharge revenue calculations).
+        """
         _LOGGER.debug("="*60)
         _LOGGER.debug("PROCESS PRICES START")
         _LOGGER.debug(f"Raw prices type: {type(raw_prices)}")
         _LOGGER.debug(f"Raw prices length: {len(raw_prices) if hasattr(raw_prices, '__len__') else 'N/A'}")
         _LOGGER.debug(f"Pricing mode: {pricing_mode}")
-        _LOGGER.debug(f"VAT: {vat} (type: {type(vat)})")
-        _LOGGER.debug(f"Tax: {tax} (type: {type(tax)})")
-        _LOGGER.debug(f"Additional cost: {additional_cost} (type: {type(additional_cost)})")
+        _LOGGER.debug(f"VAT: {vat}, Tax: {tax}, Additional cost: {additional_cost}, Additional sale cost: {additional_sale_cost}")
+        _LOGGER.debug(f"Buy formula: {buy_formula}, Sell formula: {sell_formula}")
 
         if raw_prices and len(raw_prices) > 0:
             _LOGGER.debug(f"First item type: {type(raw_prices[0])}")
@@ -261,7 +358,9 @@ class WindowCalculationEngine:
 
         if pricing_mode == PRICING_1_HOUR:
             # Group by hour and average
-            hourly_prices = {}
+            hourly_buy: Dict[datetime, list] = {}
+            hourly_sell: Dict[datetime, list] = {}
+
             for item in raw_prices:
                 try:
                     # Validate item is a dict
@@ -279,22 +378,20 @@ class WindowCalculationEngine:
                         # Already a datetime object (new Nordpool format)
                         timestamp = start_value
                     elif isinstance(start_value, str):
-                        # String format (old format)
-                        timestamp_str = start_value.replace('"', '')
-                        timestamp = datetime.fromisoformat(timestamp_str)
+                        timestamp = datetime.fromisoformat(start_value.replace('"', ''))
                     else:
                         _LOGGER.error(f"Unexpected start type: {type(start_value)}, Value: {start_value}")
                         continue
 
                     hour = timestamp.replace(minute=0, second=0, microsecond=0)
-
-                    if hour not in hourly_prices:
-                        hourly_prices[hour] = []
-
+                    spot = item.get("value", 0)
                     # Calculate total price
-                    base_price = item.get("value", 0)
-                    total_price = (base_price * (1 + vat)) + tax + additional_cost
-                    hourly_prices[hour].append(total_price)
+                    hourly_buy.setdefault(hour, []).append(
+                        self._apply_buy_price(spot, vat, tax, additional_cost, buy_formula)
+                    )
+                    hourly_sell.setdefault(hour, []).append(
+                        self._apply_sell_price(spot, tax, additional_sale_cost, sell_formula)
+                    )
 
                 except (ValueError, TypeError, AttributeError) as e:
                     _LOGGER.error(f"Failed to process price item: {e}", exc_info=True)
@@ -302,12 +399,15 @@ class WindowCalculationEngine:
                     continue
 
             # Average hourly prices
-            for hour, prices in hourly_prices.items():
-                if prices:
+            for hour in sorted(hourly_buy):
+                buy_prices = hourly_buy[hour]
+                sell_prices = hourly_sell.get(hour, [])
+                if buy_prices:
                     processed.append({
                         "timestamp": hour,
-                        "price": float(np.mean(prices)),  # Convert numpy.float64 to Python float
-                        "duration": 60  # 60 minutes
+                        "price": float(np.mean(buy_prices)),
+                        "sell_price": float(np.mean(sell_prices)) if sell_prices else 0.0,
+                        "duration": 60,
                     })
 
         else:  # 15-minute mode
@@ -329,19 +429,18 @@ class WindowCalculationEngine:
                         timestamp = start_value
                     elif isinstance(start_value, str):
                         # String format (old format)
-                        timestamp_str = start_value.replace('"', '')
-                        timestamp = datetime.fromisoformat(timestamp_str)
+                        timestamp = datetime.fromisoformat(start_value.replace('"', ''))
                     else:
                         _LOGGER.error(f"Unexpected start type: {type(start_value)}, Value: {start_value}")
                         continue
 
-                    base_price = item.get("value", 0)
-                    total_price = (base_price * (1 + vat)) + tax + additional_cost
+                    spot = item.get("value", 0)
 
                     processed.append({
                         "timestamp": timestamp,
-                        "price": total_price,
-                        "duration": 15  # 15 minutes
+                        "price": self._apply_buy_price(spot, vat, tax, additional_cost, buy_formula),
+                        "sell_price": self._apply_sell_price(spot, tax, additional_sale_cost, sell_formula),
+                        "duration": 15,
                     })
 
                 except (ValueError, TypeError, AttributeError) as e:
@@ -354,8 +453,8 @@ class WindowCalculationEngine:
 
         _LOGGER.debug(f"Processed {len(processed)} price entries")
         if processed:
-            _LOGGER.debug(f"First processed price: {processed[0]}")
-            _LOGGER.debug(f"Last processed price: {processed[-1]}")
+            _LOGGER.debug(f"First processed: buy={processed[0]['price']:.5f}, sell={processed[0]['sell_price']:.5f}")
+            _LOGGER.debug(f"Last processed: buy={processed[-1]['price']:.5f}, sell={processed[0]['sell_price']:.5f}")
         _LOGGER.debug("PROCESS PRICES END")
         _LOGGER.debug("="*60)
 
@@ -390,11 +489,7 @@ class WindowCalculationEngine:
 
             for price_data in prices:
                 timestamp = price_data["timestamp"]
-                price_hour = timestamp.hour
-                price_minute = timestamp.minute
-
-                # Convert to minutes since midnight for easier comparison
-                price_time = price_hour * 60 + price_minute
+                price_time = timestamp.hour * 60 + timestamp.minute
                 start_time = start_hour * 60 + start_minute
                 end_time = end_hour * 60 + end_minute
 
@@ -424,13 +519,12 @@ class WindowCalculationEngine:
         min_spread: float,
         min_price_diff: float
     ) -> List[Dict[str, Any]]:
-        """Find cheapest windows for charging."""
+        """Find cheapest windows for charging (uses buy price)."""
         if not prices or num_windows <= 0:
             return []
 
         # Convert to numpy array for efficient operations
         price_array = np.array([p["price"] for p in prices])
-
         # Calculate percentile threshold
         cheap_threshold = np.percentile(price_array, cheap_percentile)
 
@@ -442,7 +536,8 @@ class WindowCalculationEngine:
                     "index": i,
                     "timestamp": price_data["timestamp"],
                     "price": price_data["price"],
-                    "duration": price_data["duration"]
+                    "sell_price": price_data.get("sell_price", 0.0),
+                    "duration": price_data["duration"],
                 })
 
         # Sort by price
@@ -479,7 +574,7 @@ class WindowCalculationEngine:
         min_spread: float,
         min_price_diff: float
     ) -> List[Dict[str, Any]]:
-        """Find expensive windows for discharging."""
+        """Find expensive windows for discharging (uses sell price for revenue)."""
         if not prices or num_windows <= 0:
             return []
 
@@ -494,7 +589,8 @@ class WindowCalculationEngine:
                     "index": i,
                     "timestamp": price_data["timestamp"],
                     "price": price_data["price"],
-                    "duration": price_data["duration"]
+                    "sell_price": price_data.get("sell_price", 0.0),
+                    "duration": price_data["duration"],
                 })
 
         if not available_prices:
@@ -502,16 +598,11 @@ class WindowCalculationEngine:
 
         # Convert to numpy array
         price_array = np.array([p["price"] for p in available_prices])
-
         # Calculate percentile threshold
         expensive_threshold = np.percentile(price_array, 100 - expensive_percentile)
 
         # Get candidates above threshold
-        candidates = []
-        for price_data in available_prices:
-            if price_data["price"] >= expensive_threshold:
-                candidates.append(price_data)
-
+        candidates = [p for p in available_prices if p["price"] >= expensive_threshold]
         # Sort by price (descending for discharge)
         candidates.sort(key=lambda x: x["price"], reverse=True)
 
@@ -573,6 +664,10 @@ class WindowCalculationEngine:
 
         return candidates
 
+    # ------------------------------------------------------------------
+    # State determination
+    # ------------------------------------------------------------------
+
     def _determine_current_state(
         self,
         prices: List[Dict[str, Any]],
@@ -598,7 +693,7 @@ class WindowCalculationEngine:
             if self._is_in_time_range(current_time, start_str, end_str):
                 return self._mode_to_state(mode)
 
-        # Check price override
+        # Check price override (uses buy price)
         if config.get("price_override_enabled", False):
             threshold = config.get("price_override_threshold", 0.15)
             current_price = self._get_current_price(prices, current_time)
@@ -622,13 +717,8 @@ class WindowCalculationEngine:
 
     def _is_window_active(self, window: Dict[str, Any], current_time: datetime) -> bool:
         """Check if a window is currently active."""
-        window_time = window["timestamp"]
-        window_duration = window["duration"]
-
-        # Check if current time falls within the window
-        window_start = window_time
-        window_end = window_time + timedelta(minutes=window_duration)
-
+        window_start = window["timestamp"]
+        window_end = window_start + timedelta(minutes=window["duration"])
         return window_start <= current_time < window_end
 
     def _is_in_time_range(self, current_time: datetime, start_str: str, end_str: str) -> bool:
@@ -661,7 +751,7 @@ class WindowCalculationEngine:
     def _get_current_price(
         self, prices: List[Dict[str, Any]], current_time: datetime
     ) -> Optional[float]:
-        """Get the current price."""
+        """Get the current buy price."""
         for price_data in prices:
             if self._is_window_active(price_data, current_time):
                 return price_data["price"]
@@ -677,6 +767,10 @@ class WindowCalculationEngine:
             MODE_OFF: STATE_OFF,
         }
         return mode_map.get(mode, STATE_IDLE)
+
+    # ------------------------------------------------------------------
+    # Actual window calculation (with overrides applied)
+    # ------------------------------------------------------------------
 
     def _calculate_actual_windows(
         self,
@@ -753,16 +847,14 @@ class WindowCalculationEngine:
         for price_data in prices:
             timestamp = price_data["timestamp"]
             duration = price_data["duration"]
-            price = price_data["price"]
-
             # Determine state for this time period (priority order: time override > price override > calculated)
-            state = STATE_IDLE  # Default
+            state = STATE_IDLE
 
             # Check time override first (highest priority)
             if time_override_enabled and self._is_in_time_range(timestamp, override_start_str, override_end_str):
                 state = self._mode_to_state(override_mode)
             # Check price override
-            elif price_override_enabled and price <= price_override_threshold:
+            elif price_override_enabled and price_data["price"] <= price_override_threshold:
                 state = STATE_CHARGE
             else:
                 # Check calculated windows
@@ -786,8 +878,9 @@ class WindowCalculationEngine:
             timeline.append({
                 "timestamp": timestamp,
                 "price": price_data["price"],
+                "sell_price": price_data.get("sell_price", 0.0),
                 "duration": duration,
-                "state": state
+                "state": state,
             })
 
         # Extract actual charge and discharge windows from timeline
@@ -795,6 +888,10 @@ class WindowCalculationEngine:
         new_actual_discharge = [w for w in timeline if w["state"] in [STATE_DISCHARGE, STATE_DISCHARGE_AGGRESSIVE]]
 
         return new_actual_charge, new_actual_discharge
+
+    # ------------------------------------------------------------------
+    # Result builder
+    # ------------------------------------------------------------------
 
     def _build_result(
         self,
@@ -844,23 +941,22 @@ class WindowCalculationEngine:
         )
 
         # Calculate costs with base usage strategies
-        charge_power = config.get("charge_power", 2400) / 1000  # Convert to kW
-        discharge_power = config.get("discharge_power", 2400) / 1000
-        base_usage = config.get("base_usage", 0) / 1000
+        charge_power = config.get("charge_power", 2400) / 1000   # kW
+        discharge_power = config.get("discharge_power", 2400) / 1000  # kW
+        base_usage = config.get("base_usage", 0) / 1000           # kW
 
-        # Get strategies
         charge_strategy = config.get("base_usage_charge_strategy", "grid_covers_both")
         idle_strategy = config.get("base_usage_idle_strategy", "grid_covers")
         discharge_strategy = config.get("base_usage_discharge_strategy", "subtract_base")
         aggressive_strategy = config.get("base_usage_aggressive_strategy", "same_as_discharge")
 
         # Initialize tracking variables
-        completed_charge_cost = 0
-        completed_discharge_revenue = 0
-        completed_base_usage_cost = 0  # Grid cost for base usage
-        completed_base_usage_battery = 0  # Battery kWh used for base usage
+        completed_charge_cost = 0.0
+        completed_discharge_revenue = 0.0
+        completed_base_usage_cost = 0.0
+        completed_base_usage_battery = 0.0
 
-        # CHARGE windows: Apply charge strategy
+        # CHARGE windows: cost uses buy price
         for w in actual_charge:
             if w["timestamp"] + timedelta(minutes=w["duration"]) <= current_time:
                 duration_hours = w["duration"] / 60
@@ -872,33 +968,31 @@ class WindowCalculationEngine:
                     completed_charge_cost += w["price"] * duration_hours * charge_power
                     completed_base_usage_battery += duration_hours * base_usage
 
-        # DISCHARGE/AGGRESSIVE windows: Apply discharge/aggressive strategies
+        # DISCHARGE windows: revenue uses sell price
         # Separate by state for strategy application
         for w in actual_discharge:
             if w["timestamp"] + timedelta(minutes=w["duration"]) <= current_time:
                 duration_hours = w["duration"] / 60
+                sell_price = w.get("sell_price", w["price"])  # fallback to buy price if missing
 
                 # Determine which strategy to use based on window state
                 if w.get("state") == STATE_DISCHARGE_AGGRESSIVE:
                     # Aggressive discharge window
-                    if aggressive_strategy == "same_as_discharge":
-                        strategy = discharge_strategy
-                    else:
-                        strategy = aggressive_strategy
+                    strategy = aggressive_strategy if aggressive_strategy != "same_as_discharge" else discharge_strategy
                 else:
                     # Regular discharge window
                     strategy = discharge_strategy
 
                 if strategy == "already_included":
                     # Full discharge power generates revenue
-                    completed_discharge_revenue += w["price"] * duration_hours * discharge_power
-                else:  # subtract_base (NoM)
+                    completed_discharge_revenue += sell_price * duration_hours * discharge_power
+                else:  # subtract_base
                     # Battery covers base first, exports the rest
-                    net_export = max(0, discharge_power - base_usage)
-                    completed_discharge_revenue += w["price"] * duration_hours * net_export
+                    net_export = max(0.0, discharge_power - base_usage)
+                    completed_discharge_revenue += sell_price * duration_hours * net_export
                     completed_base_usage_battery += duration_hours * base_usage
 
-        # IDLE periods: Apply idle strategy
+        # IDLE periods: cost uses buy price
         # Build sets of timestamps for active windows
         charge_timestamps = {w["timestamp"] for w in actual_charge}
         discharge_timestamps = {w["timestamp"] for w in actual_discharge}
@@ -908,21 +1002,19 @@ class WindowCalculationEngine:
             if timestamp + timedelta(minutes=price_data["duration"]) <= current_time:
                 # Check if this period is idle (not in any active window)
                 is_active = timestamp in charge_timestamps or timestamp in discharge_timestamps
-
                 if not is_active:
                     duration_hours = price_data["duration"] / 60
                     if idle_strategy == "grid_covers":
                         # Grid provides base usage, add to cost
                         completed_base_usage_cost += price_data["price"] * duration_hours * base_usage
-                    else:  # battery_covers (NoM)
+                    else:  # battery_covers
                         # Battery provides base usage, track battery consumption
                         completed_base_usage_battery += duration_hours * base_usage
 
-        # Calculate planned total cost for ALL windows (for tomorrow's estimate)
-        # Unlike total_cost which only counts completed windows, this estimates the full day
-        planned_charge_cost = 0
-        planned_discharge_revenue = 0
-        planned_base_usage_cost = 0
+        # Planned totals (all windows, not just completed) – revenue uses sell price
+        planned_charge_cost = 0.0
+        planned_discharge_revenue = 0.0
+        planned_base_usage_cost = 0.0
 
         # All charge windows (not just completed)
         for w in actual_charge:
@@ -935,6 +1027,7 @@ class WindowCalculationEngine:
         # All discharge windows (not just completed)
         for w in actual_discharge:
             duration_hours = w["duration"] / 60
+            sell_price = w.get("sell_price", w["price"])
 
             # Determine strategy based on state
             if w.get("state") == STATE_DISCHARGE_AGGRESSIVE:
@@ -943,16 +1036,14 @@ class WindowCalculationEngine:
                 strategy = discharge_strategy
 
             if strategy == "already_included":
-                planned_discharge_revenue += w["price"] * duration_hours * discharge_power
-            else:  # subtract_base
-                net_export = max(0, discharge_power - base_usage)
-                planned_discharge_revenue += w["price"] * duration_hours * net_export
+                planned_discharge_revenue += sell_price * duration_hours * discharge_power
+            else:
+                net_export = max(0.0, discharge_power - base_usage)
+                planned_discharge_revenue += sell_price * duration_hours * net_export
 
-        # All idle periods
         for price_data in prices:
             timestamp = price_data["timestamp"]
             is_active = timestamp in charge_timestamps or timestamp in discharge_timestamps
-
             if not is_active:
                 duration_hours = price_data["duration"] / 60
                 if idle_strategy == "grid_covers":
@@ -960,7 +1051,13 @@ class WindowCalculationEngine:
 
         planned_total_cost = round(planned_charge_cost + planned_base_usage_cost - planned_discharge_revenue, 3)
 
-        # Build result
+        # Get current sell price for the result attributes
+        current_sell_price = None
+        for price_data in prices:
+            if self._is_window_active(price_data, current_time):
+                current_sell_price = price_data.get("sell_price", 0.0)
+                break
+
         result = {
             "state": current_state,
             "cheapest_times": [w["timestamp"].isoformat() for w in charge_windows],
@@ -972,7 +1069,7 @@ class WindowCalculationEngine:
             "actual_charge_times": [w["timestamp"].isoformat() for w in actual_charge],
             "actual_charge_prices": [float(w["price"]) for w in actual_charge],
             "actual_discharge_times": [w["timestamp"].isoformat() for w in actual_discharge],
-            "actual_discharge_prices": [float(w["price"]) for w in actual_discharge],
+            "actual_discharge_prices": [float(w.get("sell_price", w["price"])) for w in actual_discharge],
             "completed_charge_windows": completed_charge,
             "completed_discharge_windows": completed_discharge,
             "completed_charge_cost": round(completed_charge_cost, 3),
@@ -992,12 +1089,17 @@ class WindowCalculationEngine:
             "avg_cheap_price": round(avg_cheap, 5),
             "avg_expensive_price": round(avg_expensive, 5),
             "current_price": round(current_price, 5) if current_price else 0,
-            "price_override_active": config.get("price_override_enabled", False) and
-                                    current_price and
-                                    current_price <= config.get("price_override_threshold", 0.15),
-            "time_override_active": config.get("time_override_enabled", False),
+            "current_sell_price": round(current_sell_price, 5) if current_sell_price is not None else 0,
+            "price_override_active": bool(
+                config.get("price_override_enabled", False)
+                and current_price is not None
+                and current_price <= config.get("price_override_threshold", 0.15)
+            ),
+            "time_override_active": bool(config.get("time_override_enabled", False)),
             "automation_enabled": config.get("automation_enabled", True),
             "calculation_window_enabled": config.get("calculation_window_enabled", False),
+            "buy_price_formula": config.get("buy_price_formula", DEFAULT_BUY_PRICE_FORMULA),
+            "sell_price_formula": config.get("sell_price_formula", DEFAULT_SELL_PRICE_FORMULA),
         }
 
         return result
@@ -1035,8 +1137,11 @@ class WindowCalculationEngine:
             "avg_cheap_price": 0,
             "avg_expensive_price": 0,
             "current_price": 0,
+            "current_sell_price": 0,
             "price_override_active": False,
             "time_override_active": False,
             "automation_enabled": False,
             "calculation_window_enabled": False,
+            "buy_price_formula": DEFAULT_BUY_PRICE_FORMULA,
+            "sell_price_formula": DEFAULT_SELL_PRICE_FORMULA,
         }

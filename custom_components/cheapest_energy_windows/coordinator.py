@@ -22,6 +22,8 @@ from .const import (
     DEFAULT_BASE_USAGE_IDLE_STRATEGY,
     DEFAULT_BASE_USAGE_DISCHARGE_STRATEGY,
     DEFAULT_BASE_USAGE_AGGRESSIVE_STRATEGY,
+    DEFAULT_BUY_PRICE_FORMULA,
+    DEFAULT_SELL_PRICE_FORMULA,
     PREFIX,
 )
 
@@ -224,6 +226,7 @@ class CEWCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
             DEFAULT_AGGRESSIVE_DISCHARGE_SPREAD,
             DEFAULT_MIN_PRICE_DIFFERENCE,
             DEFAULT_ADDITIONAL_COST,
+            DEFAULT_ADDITIONAL_SALE_COST,
             DEFAULT_TAX,
             DEFAULT_VAT_RATE,
             DEFAULT_BATTERY_RTE,
@@ -238,6 +241,8 @@ class CEWCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
             DEFAULT_CALCULATION_WINDOW_END,
             DEFAULT_BATTERY_MIN_SOC_DISCHARGE,
             DEFAULT_BATTERY_MIN_SOC_AGGRESSIVE_DISCHARGE,
+            DEFAULT_BUY_PRICE_FORMULA,
+            DEFAULT_SELL_PRICE_FORMULA,
         )
 
         options = self.config_entry.options
@@ -256,6 +261,7 @@ class CEWCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
             "aggressive_discharge_spread": float(options.get("aggressive_discharge_spread", DEFAULT_AGGRESSIVE_DISCHARGE_SPREAD)),
             "min_price_difference": float(options.get("min_price_difference", DEFAULT_MIN_PRICE_DIFFERENCE)),
             "additional_cost": float(options.get("additional_cost", DEFAULT_ADDITIONAL_COST)),
+            "additional_sale_cost": float(options.get("additional_sale_cost", DEFAULT_ADDITIONAL_SALE_COST)),
             "tax": float(options.get("tax", DEFAULT_TAX)),
             "vat": float(options.get("vat", DEFAULT_VAT_RATE)),
             "battery_rte": float(options.get("battery_rte", DEFAULT_BATTERY_RTE)),
@@ -269,6 +275,10 @@ class CEWCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
             "price_override_threshold": float(options.get("price_override_threshold", DEFAULT_PRICE_OVERRIDE_THRESHOLD)),
             "battery_min_soc_discharge": float(options.get("battery_min_soc_discharge", DEFAULT_BATTERY_MIN_SOC_DISCHARGE)),
             "battery_min_soc_aggressive_discharge": float(options.get("battery_min_soc_aggressive_discharge", DEFAULT_BATTERY_MIN_SOC_AGGRESSIVE_DISCHARGE)),
+
+            # Price formulas
+            "buy_price_formula": options.get("buy_price_formula", DEFAULT_BUY_PRICE_FORMULA),
+            "sell_price_formula": options.get("sell_price_formula", DEFAULT_SELL_PRICE_FORMULA),
 
             # Tomorrow's configuration
             "charging_windows_tomorrow": float(options.get("charging_windows_tomorrow", DEFAULT_CHARGING_WINDOWS)),

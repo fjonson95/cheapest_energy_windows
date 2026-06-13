@@ -25,6 +25,7 @@ from .const import (
     DEFAULT_AGGRESSIVE_DISCHARGE_SPREAD,
     DEFAULT_MIN_PRICE_DIFFERENCE,
     DEFAULT_ADDITIONAL_COST,
+    DEFAULT_ADDITIONAL_SALE_COST,
     DEFAULT_TAX,
     DEFAULT_VAT_RATE,
     DEFAULT_BASE_USAGE,
@@ -95,6 +96,11 @@ async def async_setup_entry(
             0, 0.5, DEFAULT_ADDITIONAL_COST, 0.01, "EUR/kWh",
             "mdi:cash-plus", NumberMode.BOX
         ),
+        CEWNumber(
+            hass, config_entry, "additional_sale_cost", "Additional Sale Cost",
+            0, 0.5, DEFAULT_ADDITIONAL_SALE_COST, 0.01, "EUR/kWh",
+            "mdi:cash-plus", NumberMode.BOX
+        ),        
         CEWNumber(
             hass, config_entry, "tax", "Tax",
             0, 0.5, DEFAULT_TAX, 0.01, "EUR/kWh",

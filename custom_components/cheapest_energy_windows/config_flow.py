@@ -18,6 +18,7 @@ from .const import (
     CONF_VAT_RATE,
     CONF_TAX,
     CONF_ADDITIONAL_COST,
+    CONF_ADDITIONAL_SALE_COST,
     CONF_BASE_USAGE,
     CONF_BASE_USAGE_CHARGE_STRATEGY,
     CONF_BASE_USAGE_IDLE_STRATEGY,
@@ -33,6 +34,7 @@ from .const import (
     DEFAULT_VAT_RATE,
     DEFAULT_TAX,
     DEFAULT_ADDITIONAL_COST,
+    DEFAULT_ADDITIONAL_SALE_COST,
     DEFAULT_BASE_USAGE,
     DEFAULT_BASE_USAGE_CHARGE_STRATEGY,
     DEFAULT_BASE_USAGE_IDLE_STRATEGY,
@@ -215,6 +217,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_ADDITIONAL_COST, default=DEFAULT_ADDITIONAL_COST): vol.All(
                     vol.Coerce(float), vol.Range(min=0, max=1)
                 ),
+                vol.Required(CONF_ADDITIONAL_SALE_COST, default=DEFAULT_ADDITIONAL_SALE_COST): vol.All(
+                    vol.Coerce(float), vol.Range(min=0, max=1)
+                ),                
             }),
             description_placeholders={
                 "vat_help": "VAT rate as decimal (e.g., 0.21 for 21%)",
@@ -623,6 +628,7 @@ Configuration Summary:
 - VAT Rate: {self.data.get(CONF_VAT_RATE, DEFAULT_VAT_RATE) * 100:.0f}%
 - Tax: €{self.data.get(CONF_TAX, DEFAULT_TAX):.5f}/kWh
 - Additional Cost: €{self.data.get(CONF_ADDITIONAL_COST, DEFAULT_ADDITIONAL_COST):.5f}/kWh
+- Additional sale Cost: €{self.data.get(CONF_ADDITIONAL_SALE_COST, DEFAULT_ADDITIONAL_SALE_COST):.5f}/kWh
 - Charge Power: {charge_power}W
 - Discharge Power: {discharge_power}W
 - Pricing Duration: {pricing_duration.replace('_', ' ').title()}
@@ -704,7 +710,7 @@ class CEWOptionsFlow(config_entries.OptionsFlow):
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""
-        self.config_entry = config_entry
+        # self.config_entry = config_entry
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -751,5 +757,12 @@ class CEWOptionsFlow(config_entries.OptionsFlow):
                         self.config_entry.data.get(CONF_ADDITIONAL_COST, DEFAULT_ADDITIONAL_COST)
                     ),
                 ): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
+                vol.Optional(
+                    CONF_ADDITIONAL_SALE_COST,
+                    default=options.get(
+                        CONF_ADDITIONAL_SALE_COST,
+                        self.config_entry.data.get(CONF_ADDITIONAL_SALE_COST, DEFAULT_ADDITIONAL_SALE_COST)
+                    ),
+                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),                
             }),
         )

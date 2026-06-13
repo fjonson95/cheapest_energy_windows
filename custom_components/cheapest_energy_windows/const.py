@@ -15,6 +15,7 @@ CONF_PRICE_SENSOR: Final = "price_sensor"
 CONF_VAT_RATE: Final = "vat_rate"
 CONF_TAX: Final = "tax"
 CONF_ADDITIONAL_COST: Final = "additional_cost"
+CONF_ADDITIONAL_SALE_COST: Final = "additional_sale_cost"
 CONF_BATTERY_SYSTEM_NAME: Final = "battery_system_name"
 CONF_BATTERY_SOC_SENSOR: Final = "battery_soc_sensor"
 CONF_BATTERY_ENERGY_SENSOR: Final = "battery_available_energy_sensor"
@@ -32,6 +33,7 @@ DEFAULT_PRICE_SENSOR: Final = ""
 DEFAULT_VAT_RATE: Final = 0.21
 DEFAULT_TAX: Final = 0.12286
 DEFAULT_ADDITIONAL_COST: Final = 0.02398
+DEFAULT_ADDITIONAL_SALE_COST : Final = 0.065
 DEFAULT_CHARGING_WINDOWS: Final = 6
 DEFAULT_EXPENSIVE_WINDOWS: Final = 3
 DEFAULT_CHEAP_PERCENTILE: Final = 25
@@ -59,11 +61,27 @@ DEFAULT_BASE_USAGE_IDLE_STRATEGY: Final = "battery_covers"
 DEFAULT_BASE_USAGE_DISCHARGE_STRATEGY: Final = "subtract_base"
 DEFAULT_BASE_USAGE_AGGRESSIVE_STRATEGY: Final = "same_as_discharge"
 
+# Price formula defaults
+# Buy price formula:
+#   "additive"  → (spot * vat) + tax + additional_cost   [legacy default]
+#   "inclusive" → (spot + tax + additional_cost) * vat
+DEFAULT_BUY_PRICE_FORMULA: Final = "additive"
+
+# Sell price formula:
+#   "spot_only"    → spot price (no adjustments)
+#   "minus_costs"  → spot - additional_sale_cost - tax
+#   "no_tax"       → spot - additional_sale_cost
+DEFAULT_SELL_PRICE_FORMULA: Final = "spot_only"
+
 # Base usage strategy options
 BASE_USAGE_CHARGE_OPTIONS: Final = ["grid_covers_both", "battery_covers_base"]
 BASE_USAGE_IDLE_OPTIONS: Final = ["grid_covers", "battery_covers"]
 BASE_USAGE_DISCHARGE_OPTIONS: Final = ["already_included", "subtract_base"]
 BASE_USAGE_AGGRESSIVE_OPTIONS: Final = ["same_as_discharge", "already_included", "subtract_base"]
+
+# Price formula options
+BUY_PRICE_FORMULA_OPTIONS: Final = ["additive", "inclusive"]
+SELL_PRICE_FORMULA_OPTIONS: Final = ["spot_only", "minus_costs","no_tax"]
 
 # Update intervals
 UPDATE_INTERVAL: Final = timedelta(seconds=10)
@@ -152,6 +170,11 @@ CALCULATION_AFFECTING_KEYS: Final = {
     "vat",
     "tax",
     "additional_cost",
+    "additional_sale_cost",
+
+    # Price formulas
+    "buy_price_formula",
+    "sell_price_formula",
 
     # Base usage
     "base_usage",
